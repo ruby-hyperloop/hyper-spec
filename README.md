@@ -2,8 +2,8 @@
 
 <p align="center">
 
-<a href="http://ruby-hyperloop.io/" alt="Hyperloop" title="Hyperloop">
-<img width="350px" src="http://ruby-hyperloop.io/images/hyperloop-github-logo.png">
+<a href="http://ruby-hyperloop.org/" alt="Hyperloop" title="Hyperloop">
+<img width="350px" src="http://ruby-hyperloop.org/images/hyperloop-github-logo.png">
 </a>
 
 </p>
@@ -12,18 +12,18 @@
 
 <br>
 
-<a href="http://ruby-hyperloop.io/" alt="Hyperloop" title="Hyperloop">
-<img src="http://ruby-hyperloop.io/images/githubhyperloopbadge.png">
+<a href="http://ruby-hyperloop.org/" alt="Hyperloop" title="Hyperloop">
+<img src="http://ruby-hyperloop.org/images/githubhyperloopbadge.png">
 </a>
 
 <a href="https://gitter.im/ruby-hyperloop/chat" alt="Gitter chat" title="Gitter chat">
-<img src="http://ruby-hyperloop.io/images/githubgitterbadge.png">
+<img src="http://ruby-hyperloop.org/images/githubgitterbadge.png">
 </a>
 
 [![Gem Version](https://badge.fury.io/rb/hyper-spec.svg)](https://badge.fury.io/rb/hyper-spec)
 
 <p align="center">
-<img src="http://ruby-hyperloop.io/images/HyperSpecs.png" width="100" alt="Hyper-specs">
+<img src="http://ruby-hyperloop.org/images/HyperSpecs.png" width="100" alt="Hyper-specs">
 </p>
 
 </div>
@@ -59,9 +59,9 @@ require 'hyper-spec'
 ```
 
 4. Follow the Hyper-Spec documentation:
-    * [Hyper-Spec documentation](http://ruby-hyperloop.io/tools/hyperspec/)
-    * [Hyperloop Guides](http://ruby-hyperloop.io/docs/architecture)
-    * [Hyperloop Tutorial](http://ruby-hyperloop.io/tutorials)
+    * [Hyper-Spec documentation](http://ruby-hyperloop.org/tools/hyperspec/)
+    * [Hyperloop Guides](http://ruby-hyperloop.org/docs/architecture)
+    * [Hyperloop Tutorial](http://ruby-hyperloop.org/tutorials)
 
 ## Community
 
