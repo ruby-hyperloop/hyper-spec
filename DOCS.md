@@ -355,6 +355,16 @@ There is one confusing thing to note:  On the server if you `sleep` then you wil
 If you are getting failures on Poltergeist but not Firefox, make sure you are not requiring `browser` in your components.rb.
 Requiring `browser/interval` or `browser/delay` is okay.
 
+If you are using the standard hyperloop webpacker setup then (at least for now) you will have to add  
+```ruby
+  config.before(:each, js: true) do
+    client_option layout: 'application'
+  end
+```  
+to your specs.
+
+If you are using something like devise be aware that your application controller will probably intercept page views, and redirect to a login page.  To prevent this see this nice blog post:  http://www.colorfultyping.com/disabling-devise-for-rails-integration-testing/
+
 ## Development
 
 After checking out the repo, run bundle install and you should be good to go.
