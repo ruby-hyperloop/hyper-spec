@@ -31,6 +31,10 @@ describe 'hyper-spec', js: true do
       expect(evaluate_script('document.title')).to eq('HyperMesh Test App')
     end
 
+    it '#pause with message' do
+      expect(pause('stop me')).to eq('...')
+    end
+
     it "can use an alternative style sheet" do
       client_option style_sheet: 'test'
       mount 'StyledDiv' do # see test_app/spec/assets/stylesheets
