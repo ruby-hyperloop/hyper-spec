@@ -7,6 +7,42 @@ require 'hyper-spec/version'
 require 'hyper-spec/wait_for_ajax'
 require 'selenium/web_driver/firefox/profile'
 
+module HyperSpec
+  def self.reset_between_examples=(value)
+    RSpec.configuration.reset_between_examples = value
+  end
+
+  def self.reset_between_examples?
+    RSpec.configuration.reset_between_examples
+  end
+
+  def self.reset_sessions!
+    Capybara.old_reset_sessions!
+  end
+end
+
+module Capybara
+  class << self
+    alias_method :old_reset_sessions!, :reset_sessions!
+    def reset_sessions!
+      old_reset_sessions! if HyperSpec.reset_between_examples?
+    end
+  end
+end
+
+RSpec.configure do |config|
+  config.add_setting :reset_between_examples, default: true
+  config.before(:all, no_reset: true) do
+    HyperSpec.reset_between_examples = false
+  end
+  config.after(:all) do
+    HyperSpec.reset_sessions! unless HyperSpec.reset_between_examples?
+  end
+  config.before(:each) do |example|
+    insure_page_loaded(true) if example.metadata[:js] && !HyperSpec.reset_between_examples?
+  end
+end
+
 RSpec.configure do |config|
   config.include HyperSpec::ComponentTestHelpers
   config.include HyperSpec::WaitForAjax
@@ -15,6 +51,7 @@ RSpec.configure do |config|
   config.mock_with :rspec
 
   config.add_setting :debugger_width, default: nil
+
 
   config.before(:each) do
     Hyperloop.class_eval do
@@ -43,7 +80,6 @@ RSpec.configure do |config|
       PusherFake::Channel.reset if defined? PusherFake
     end
   end
-
 end
 
 # Capybara config

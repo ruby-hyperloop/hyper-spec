@@ -2,10 +2,43 @@
 require 'parser/current'
 require 'unparser'
 require 'method_source'
+require 'pry'
 require_relative '../../lib/hyper-spec/time_cop.rb'
 
+module MethodSource
+  class << self
+    alias original_lines_for_before_hyper_spec lines_for
+    alias original_source_helper_before_hyper_spec source_helper
+
+    def source_helper(source_location, name=nil)
+      source_location[1] = 1 if source_location[0] == '(pry)'
+      original_source_helper_before_hyper_spec source_location, name
+    end
+
+    def lines_for(file_name, name = nil)
+      if file_name == '(pry)'
+        HyperSpec.current_pry_code_block
+      else
+        original_lines_for_before_hyper_spec file_name, name
+      end
+    end
+  end
+end
+
 module HyperSpec
+
+  class << self
+    attr_accessor :current_pry_code_block
+    Pry.hooks.add_hook(:before_eval, "hyper_spec_code_capture") do |code|
+      HyperSpec.current_pry_code_block = code
+    end
+    Pry.hooks.add_hook(:after_eval, "hyper_spec_code_capture") do
+      # @current_pry_code_block = nil
+    end
+  end if defined? Pry
+
   module ComponentTestHelpers
+
     TOP_LEVEL_COMPONENT_PATCH =
       Opal.compile(File.read(File.expand_path('../../react/top_level_rails_component.rb', __FILE__)))
     TIME_COP_CLIENT_PATCH =
@@ -22,13 +55,13 @@ module HyperSpec
       end
     end
 
-    def build_test_url_for(controller)
+    def build_test_url_for(controller, ping = nil)
       unless controller
-        unless defined?(::ReactTestController)
-          Object.const_set('ReactTestController', Class.new(::ActionController::Base))
+        unless defined?(::HyperSpecTestController)
+          Object.const_set('HyperSpecTestController', Class.new(::ActionController::Base))
         end
 
-        controller = ::ReactTestController
+        controller = ::HyperSpecTestController
       end
 
       route_root = controller.name.gsub(/Controller$/, '').underscore
@@ -36,21 +69,26 @@ module HyperSpec
       unless controller.method_defined?(:test)
         controller.class_eval do
           define_method(:test) do
+            head(:no_content) && return if params[:id] == 'ping'
             route_root = self.class.name.gsub(/Controller$/, '').underscore
             test_params = ::Rails.cache.read("/#{route_root}/#{params[:id]}")
             @component_name = test_params[0]
             @component_params = test_params[1]
-            render_params = test_params[2]
+            html_block = test_params[2]
+            render_params = test_params[3]
             render_on = render_params.delete(:render_on) || :client_only
             _mock_time = render_params.delete(:mock_time)
             style_sheet = render_params.delete(:style_sheet)
             javascript = render_params.delete(:javascript)
             code = render_params.delete(:code)
+            #page = "#{html_block}\n</body>\n"
+            page = "</body>\n"
 
             page = '<%= react_component @component_name, @component_params, '\
-                   "{ prerender: #{render_on != :client_only} } %>"
+                   "{ prerender: #{render_on != :client_only} } %>\n#{page}" if @component_name
+            #page = "<body>\n#{page}"
             unless render_on == :server_only
-              page = "<script type='text/javascript'>\n#{TOP_LEVEL_COMPONENT_PATCH}\n</script>\n#{page}"
+              page = "<script type='text/javascript'>\n#{TOP_LEVEL_COMPONENT_PATCH}\n</script>\n#{page}" if @component_name
               page = "<script type='text/javascript'>\n#{code}\n</script>\n#{page}" if code
             end
 
@@ -68,14 +106,20 @@ module HyperSpec
             page = "<script type='text/javascript'>go = function() "\
                    "{window.hyper_spec_waiting_for_go = false}</script>\n#{page}"
 
-            title = view_context.escape_javascript(ComponentTestHelpers.current_example.description)
-            title = "#{title}...continued." if ComponentTestHelpers.description_displayed
+            if ComponentTestHelpers.current_example
 
-            page = "<script type='text/javascript'>console.log('%c#{title}',"\
-                   "'color:green; font-weight:bold; font-size: 200%')</script>\n#{page}"
+              title = view_context.escape_javascript(ComponentTestHelpers.current_example.description)
+              title = "#{title}...continued." if ComponentTestHelpers.description_displayed
 
-            ComponentTestHelpers.description_displayed = true
+              page = "<script type='text/javascript'>console.log('%c#{title}',"\
+                     "'color:green; font-weight:bold; font-size: 200%')</script>\n#{page}"
+
+              ComponentTestHelpers.description_displayed = true
+            end
+            page = "<body>\n#{html_block}\n#{page}"
             render_params[:inline] = page
+            response.headers['Cache-Control'] = 'max-age=120'
+            response.headers['X-Tracking-ID'] = '123456'
             render render_params
           end
         end
@@ -94,19 +138,45 @@ module HyperSpec
           routes.disable_clear_and_finalize = false
         end
       end
+      if ping
+        "/#{route_root}/ping"
+      else
+        "/#{route_root}/#{@test_id = (@test_id || 0) + 1}"
+      end
+    end
 
-      "/#{route_root}/#{@test_id = (@test_id || 0) + 1}"
+    def insert_html(str)
+      @html_block = "#{@html_block}\n#{str}"
     end
 
     def isomorphic(&block)
       yield
-      on_client(&block)
+      before_mount(&block)
     end
 
-    def evaluate_ruby(str = '', opts = {}, &block)
-      insure_mount
+    def evaluate_ruby(p1 = nil, p2 = nil, p3 = nil, &block)
+      insure_page_loaded
+      if p1.is_a? Hash
+        str = ''
+        p3 = p2
+        p2 = p1
+      else
+        str = p1
+      end
+      if p3
+        opts = p2
+        args = p3
+      elsif p2
+        opts = {}
+        args = p2
+      else
+        opts = args = {}
+      end
+      args.each do |name, value|
+        str = "#{name} = #{value.inspect}\n#{str}"
+      end
       if block
-        str = "#{str}\n#{Unparser.unparse Parser::CurrentRuby.parse(block.source).children.last}"
+        str = "#{add_locals(str, block)}\n#{Unparser.unparse Parser::CurrentRuby.parse(block.source).children.last}"
       end
       js = Opal.compile(str).delete("\n").gsub('(Opal);', '(Opal)')
       # workaround for firefox 58 and geckodriver 0.19.1, because firefox is unable to find .$to_json:
@@ -114,24 +184,81 @@ module HyperSpec
       JSON.parse(evaluate_script("[#{js}].$to_json()"), opts).first
     end
 
-    def expect_evaluate_ruby(str = '', opts = {}, &block)
-      insure_mount
-      expect(evaluate_ruby(add_opal_block(str, block), opts))
+    alias c? evaluate_ruby
+
+    def expect_evaluate_ruby(p1 = nil, p2 = nil, p3 = nil, &block)
+      insure_page_loaded
+      if p1.is_a? Hash
+        str = ''
+        p3 = p2
+        p2 = p1
+      else
+        str = p1
+      end
+      if p3
+        opts = p2
+        args = p3
+      elsif p2
+        opts = {}
+        args = p2
+      else
+        opts = args = {}
+      end
+      args.each do |name, value|
+        str = "#{name} = #{value.inspect}\n#{str}"
+      end
+      expect(evaluate_ruby(add_opal_block(str, block), opts, {}))
+    end
+
+    PREDEFINED_INSTANCE_VARIABLES = %i[
+      @__inspect_output @__memoized @example @client_code @html_block @fixture_cache
+      @fixture_connections @connection_subscriber @loaded_fixtures @client_options @test_id
+    ]
+
+    def add_locals(in_str, block)
+      b = block.binding
+
+      memoized = b.eval('__memoized').instance_variable_get(:@memoized)
+      in_str = memoized.inject(in_str) do |str, pair|
+        "#{str}\n#{pair.first} = #{pair.last.inspect}"
+      end if memoized
+
+      in_str = b.local_variables.inject(in_str) do |str, var|
+        "#{str}\n#{var} = #{b.local_variable_get(var).inspect}"
+      end
+
+      in_str = b.eval('instance_variables').inject(in_str) do |str, var|
+        if PREDEFINED_INSTANCE_VARIABLES.include? var
+          str
+        else
+          "#{str}\n#{var} = #{b.eval("instance_variable_get('#{var}')").inspect}"
+        end
+      end
+      in_str
     end
 
     def add_opal_block(str, block)
-      # big assumption here is that we are going to follow this with a .to
-      # hence .children.first followed by .children.last
-      # probably should do some kind of "search" to make this work nicely
+      # we need to find the block within the source ast.  This code works for
+      # both the case where the following `.to` method is on a new line after the
+      # block (ast.type == :block) in which case the block code is the third child
+      # otherwise the expression begins begins with a send, so we get the block from
+      # within the expression
       return str unless block
-      "#{str}\n"\
-      "#{Unparser.unparse Parser::CurrentRuby.parse(block.source).children.first.children.last}"
+
+      source = block.source
+      ast = Parser::CurrentRuby.parse(source)
+      while ast.type == :send
+        ast = ast.children.first
+      end
+      raise "could not find block within source: #{block.source}" unless ast.type == :block
+      "#{add_locals(str, block)}\n"\
+      "#{Unparser.unparse ast.children.last}"
     end
 
-    def evaluate_promise(str = '', opts = {}, &block)
-      insure_mount
+    def evaluate_promise(str = '', opts = {}, _dummy = nil, &block)
+      insure_page_loaded
       str = "#{str}\n#{Unparser.unparse Parser::CurrentRuby.parse(block.source).children.last}" if block
-      str = "#{str}.then { |args| args = [args]; `window.hyper_spec_promise_result = args` }"
+      str = "(#{str}).then { |args| args = [args]; `window.hyper_spec_promise_result = args` }"
       js = Opal.compile(str).gsub("\n","").gsub("(Opal);","(Opal)")
       page.evaluate_script("window.hyper_spec_promise_result = false")
       page.execute_script(js)
@@ -144,8 +271,9 @@ module HyperSpec
       JSON.parse(page.evaluate_script("window.hyper_spec_promise_result.$to_json()"), opts).first
     end
 
+    alias promise? evaluate_promise
+
     def expect_promise(str = '', opts = {}, &block)
-      insure_mount
       expect(evaluate_promise(add_opal_block(str, block), opts))
     end
 
@@ -154,19 +282,30 @@ module HyperSpec
       execute_script("console.log(#{js})")
     end
 
-    def on_client(&block)
+    def before_mount(&block) # was called on_client
       @client_code =
         "#{@client_code}#{Unparser.unparse Parser::CurrentRuby.parse(block.source).children.last}\n"
     end
+
+    # to get legacy on_client behavior you can alias on_client before_mount
+
+    alias on_client evaluate_ruby
 
     def debugger
       `debugger`
       nil
     end
 
-    def insure_mount
-      # rescue in case page is not defined...
-      mount unless page.instance_variable_get('@hyper_spec_mounted')
+    def insure_page_loaded(only_if_code_or_html_exists = nil)
+      return if only_if_code_or_html_exists && !@client_code && !@html_block
+      # if we are not resetting between examples, or think its mounted
+      # then look for Opal, but if we can't find it, then ping to clear and try again
+      if !HyperSpec.reset_between_examples? || page.instance_variable_get('@hyper_spec_mounted')
+        r = evaluate_script('Opal && true') rescue nil
+        return if r
+        page.visit build_test_url_for(nil, true) rescue nil
+      end
+      load_page
     end
 
     def client_option(opts = {})
@@ -184,7 +323,6 @@ module HyperSpec
 
       opts = client_options opts
       test_url = build_test_url_for(opts.delete(:controller))
-
       if block || @client_code || component_name.nil?
         block_with_helpers = <<-code
           module ComponentHelpers
@@ -216,35 +354,45 @@ module HyperSpec
               }
             end
           end
-          class React::Component::HyperTestDummy < React::Component::Base
-                def render; end
-          end
+          # class React::Component::HyperTestDummy < React::Component::Base
+          #       def render; end
+          # end
           #{@client_code}
           #{Unparser.unparse(Parser::CurrentRuby.parse(block.source).children.last) if block}
         code
         opts[:code] = Opal.compile(block_with_helpers)
       end
-
-      component_name ||= 'React::Component::HyperTestDummy'
-      ::Rails.cache.write(test_url, [component_name, params, opts])
+      @client_code = nil
+      #component_name ||= 'React::Component::HyperTestDummy'
+      ::Rails.cache.write(test_url, [component_name, params, @html_block, opts])
+      @html_block = nil
       test_code_key = "hyper_spec_prerender_test_code.js"
-      @@original_server_render_files ||= ::Rails.configuration.react.server_renderer_options[:files]
-      if opts[:render_on] == :both || opts[:render_on] == :server_only
-        unless opts[:code].blank?
-          ::Rails.cache.write(test_code_key, opts[:code])
-          ::Rails.configuration.react.server_renderer_options[:files] = @@original_server_render_files + [test_code_key]
-          ::React::ServerRendering.reset_pool # make sure contexts are reloaded so they dont use code from cache, as the rails filewatcher doesnt look for cache changes
-        else
-          ::Rails.cache.delete(test_code_key)
-          ::Rails.configuration.react.server_renderer_options[:files] = @@original_server_render_files
-          ::React::ServerRendering.reset_pool # make sure contexts are reloaded so they dont use code from cache, as the rails filewatcher doesnt look for cache changes
+      if defined? ::React
+        @@original_server_render_files ||= ::Rails.configuration.react.server_renderer_options[:files]
+        if opts[:render_on] == :both || opts[:render_on] == :server_only
+          unless opts[:code].blank?
+            ::Rails.cache.write(test_code_key, opts[:code])
+            ::Rails.configuration.react.server_renderer_options[:files] = @@original_server_render_files + [test_code_key]
+            ::React::ServerRendering.reset_pool # make sure contexts are reloaded so they dont use code from cache, as the rails filewatcher doesnt look for cache changes
+          else
+            ::Rails.cache.delete(test_code_key)
+            ::Rails.configuration.react.server_renderer_options[:files] = @@original_server_render_files
+            ::React::ServerRendering.reset_pool # make sure contexts are reloaded so they dont use code from cache, as the rails filewatcher doesnt look for cache changes
+          end
         end
       end
+      page.instance_variable_set('@hyper_spec_mounted', false)
       visit test_url
       wait_for_ajax unless opts[:no_wait]
       page.instance_variable_set('@hyper_spec_mounted', true)
       Lolex.init(self, client_options[:time_zone], client_options[:clock_resolution])
     end
+
+    def load_page
+      mount
+    end
+
+    alias reload_page load_page
 
     [:callback_history_for, :last_callback_for, :clear_callback_history_for,
      :event_history_for, :last_event_for, :clear_event_history_for].each do |method|
@@ -354,6 +502,84 @@ module HyperSpec
             page.evaluate_ruby("#{self.class.name}.find(#{id}).attributes", symbolize_names: true)
           end
         end
+      end
+    end
+  end
+end
+
+
+
+module RSpec
+  module Expectations
+    class ExpectationTarget
+    end
+
+    module HyperSpecInstanceMethods
+
+      def self.included(base)
+        base.include HyperSpec::ComponentTestHelpers
+      end
+
+      def to_on_client(matcher, message = nil, &block)
+        evaluate_client('ruby').to(matcher, message, &block)
+      end
+
+      alias on_client_to to_on_client
+
+      def to_on_client_not(matcher, message = nil, &block)
+        evaluate_client('ruby').not_to(matcher, message, &block)
+      end
+
+      alias on_client_to_not to_on_client_not
+      alias on_client_not_to to_on_client_not
+      alias to_not_on_client to_on_client_not
+      alias not_to_on_client to_on_client_not
+
+      def to_then(matcher, message = nil, &block)
+        evaluate_client('promise').to(matcher, message, &block)
+      end
+
+      alias then_to to_then
+
+      def to_then_not(matcher, message = nil, &block)
+        evaluate_client('promise').not_to(matcher, message, &block)
+      end
+
+      alias then_to_not to_then_not
+      alias then_not_to to_then_not
+      alias to_not_then to_then_not
+      alias not_to_then to_then_not
+
+      private
+
+      def evaluate_client(method)
+        source = add_opal_block(@args_str, @target)
+        value = @target.binding.eval("evaluate_#{method}(#{source.inspect}, {}, {})")
+        ExpectationTarget.for(value, nil)
+      end
+    end
+
+    class OnClientWithArgsTarget
+      include HyperSpecInstanceMethods
+
+      def initialize(target, args)
+        unless args.is_a? Hash
+          raise ExpectationNotMetError,
+                "You must pass a hash of local var, value pairs to the 'with' modifier"
+        end
+
+        @target = target
+        @args_str = args.collect do |name, value|
+          "#{name} = #{value.inspect}"
+        end.join("\n")
+      end
+    end
+
+    class BlockExpectationTarget < ExpectationTarget
+      include HyperSpecInstanceMethods
+
+      def with(args)
+        OnClientWithArgsTarget.new(@target, args)
       end
     end
   end
